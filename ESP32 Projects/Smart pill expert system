@@ -1,0 +1,168 @@
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+#include <WiFi.h>
+#include <NTPClient.h>
+#include <WiFiUdp.h>
+#include <ESP32_MailClient.h>
+
+// Wi-Fi Credentials
+const char* ssid = "hi";
+const char* password = "12345678";
+
+// SMTP Email Credentials
+const char* smtpServer = "smtp.gmail.com";
+const int smtpPort = 465;  // Use 465 for SSL
+
+const char* emailSender = "aravindpuvvada196@gmail.com";
+const char* emailRecipient = "aravindpuvvada196@gmail.com";
+const char* emailSubject = "Medicine Reminder Alert!";
+const char* emailUsername = "aravindpuvvada196@gmail.com";
+const char* emailPassword = "bxsw msiq cmly wjxp"; // Replace with an actual App Password
+
+// Create SMTP session
+SMTPData smtpData;
+
+// Initialize I2C LCD (Change address if needed, usually 0x27 or 0x3F)
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+
+// PIR Sensor and Buzzer Pins
+#define PIR_SENSOR_PIN4 4
+#define PIR_SENSOR_PIN3 18
+#define PIR_SENSOR_PIN2 23
+#define PIR_SENSOR_PIN1 19
+#define BUZZER_PIN 2
+
+int i = 0, j = 0, k = 0, a = 0;
+
+// NTP Client Setup
+WiFiUDP ntpUDP;
+NTPClient timeClient(ntpUDP, "pool.ntp.org", 19800, 60000); // IST (GMT+5:30)
+
+void displayProjectName() {
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Smart Pill");
+  lcd.setCursor(0, 1);
+  lcd.print("Expert System");
+  delay(3000);
+}
+
+void sendEmail(const char* slot, bool success) {
+  smtpData.setLogin(smtpServer, smtpPort, emailUsername, emailPassword);
+  smtpData.setSender("ESP32 Mailer", emailSender);
+  smtpData.addRecipient(emailRecipient);
+  
+  String message;
+  if (success) {
+    message = "Successfully! " + String(slot) + " Medicines was consumed. Don't worry!";
+  } else {
+    message = "Alert Alert!! " + String(slot) + " Medicines was not taken!";
+  }
+  
+  smtpData.setSubject(emailSubject);
+  smtpData.setMessage(message, false);
+
+  if (MailClient.sendMail(smtpData)) {
+    Serial.println("Email sent successfully");
+  } else {
+    Serial.println("Failed to send email");
+    Serial.println(MailClient.smtpErrorReason());
+  }
+
+  smtpData.empty();  // Free memory
+}
+
+void setup() {
+  Serial.begin(115200);
+  lcd.init();
+  lcd.backlight();
+
+  pinMode(PIR_SENSOR_PIN4, INPUT);
+  pinMode(PIR_SENSOR_PIN3, INPUT);
+  pinMode(PIR_SENSOR_PIN2, INPUT);
+  pinMode(PIR_SENSOR_PIN1, INPUT);
+  pinMode(BUZZER_PIN, OUTPUT);
+
+  // Connect to WiFi
+  lcd.setCursor(0, 0);
+  lcd.print("Connecting WiFi...");
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("\nConnected to WiFi!");
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("WiFi Connected");
+
+  // Start NTP Client
+  timeClient.begin();
+  timeClient.setTimeOffset(19800); // Set IST Offset (GMT+5:30)
+
+  displayProjectName();
+}
+
+void loop() {
+  timeClient.update();
+  int currentHour = timeClient.getHours();
+  int currentMinute = timeClient.getMinutes();
+  int currentSecond = timeClient.getSeconds();
+
+  // Display Time on LCD
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Time: ");
+  lcd.print(currentHour);
+  lcd.print(":");
+  lcd.print(currentMinute);
+  lcd.print(":");
+  lcd.print(currentSecond);
+  delay(1000);
+
+  struct Reminder {
+    int hour, minute, second;
+    int &flag;
+    int pirPin;
+    const char* slotName;
+  };
+
+  Reminder reminders[] = {
+    {22, 2, 52, i, PIR_SENSOR_PIN4, "Slot 4"},
+    {22, 3, 52, j, PIR_SENSOR_PIN3, "Slot 3"},
+    {22, 4, 32, k, PIR_SENSOR_PIN2, "Slot 2"},
+    {22, 5, 38, a, PIR_SENSOR_PIN1, "Slot 1"},
+  };
+
+  for (Reminder& rem : reminders) {
+    if ((currentHour == rem.hour && currentMinute == rem.minute && currentSecond == rem.second) || rem.flag == 1) {
+      bool motionDetected = false;
+      rem.flag = 1;
+      unsigned long startTime = millis();
+
+      while (millis() - startTime < 10000) {
+        if (digitalRead(rem.pirPin) == LOW) {
+          motionDetected = true;
+          break;
+        }
+      }
+
+      if (motionDetected) {
+        Serial.println(String(rem.slotName) + " Med Consumed.");
+        rem.flag = 0;
+        digitalWrite(BUZZER_PIN, LOW);
+        lcd.setCursor(0, 1);
+        lcd.print(String(rem.slotName) + " Done");
+        sendEmail(rem.slotName, true); // Send success email
+      } else {
+        Serial.println("No Motion Detected. Buzzer ON.");
+        lcd.setCursor(0, 1);
+        lcd.print("Take " + String(rem.slotName));
+        digitalWrite(BUZZER_PIN, HIGH);
+        sendEmail(rem.slotName, false); // Send failure email
+      }
+      delay(2000);
+    }
+  }
+}
+//final code competed
